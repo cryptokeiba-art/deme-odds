@@ -30,8 +30,8 @@ with c1:
     prev_raw = st.text_input("【1】前走確定着順", "7, 6, 9")
     total_n = st.number_input("【2】今レース頭数", min_value=1, value=12)
 with c2:
-    # 画像でもテキストでも対応できるよう入力を受け付け
-    odds_raw = st.text_area("【3】出馬表をコピペしてください", height=200, placeholder="人気 枠 馬番 馬名 単勝... の順で貼り付け")
+    # ここに「コピーしたテキスト」を貼り付けてください
+    odds_raw = st.text_area("【3】出馬表をコピペしてください（Ctrl+V）", height=250, placeholder="人気 枠 馬番 馬名 単勝... の順で貼り付け")
 
 if odds_raw and prev_raw:
     try:
@@ -41,20 +41,26 @@ if odds_raw and prev_raw:
         rows = []
         for line in odds_raw.split('\n'):
             line = line.strip()
-            # 数値をすべて抽出
+            # 数値（小数含む）をすべて抽出
             nums = re.findall(r"\d+\.\d+|\d+", line)
-            if len(nums) < 4: continue
+            if len(nums) < 3: continue
             
-            # 画像[image_03e7bb.png]の並びに準拠：
-            # nums[0]=人気, nums[1]=枠, nums[2]=馬番, nums[3]=単勝オッズ(小数)
-            # もしnums[3]が整数なら、小数が見つかるまでスライド
+            # 単勝オッズ（小数）を探す
             floats = [n for n in nums if "." in n]
             if not floats: continue
-            
             tan_odds = float(floats[0])
-            # 単勝オッズ(floats[0])のインデックスを探し、その2つ前が「馬番」
+            
+            # 小数のインデックスを基準に馬番を特定
             f_idx = nums.index(floats[0])
-            horse_num = int(nums[f_idx - 1])
+            # 小数の1つ前、または2つ前にある「1〜頭数」の範囲の数字を馬番とする
+            horse_num = 0
+            for offset in [1, 2]:
+                check_idx = f_idx - offset
+                if check_idx >= 0:
+                    val = int(nums[check_idx])
+                    if 1 <= val <= total_n:
+                        horse_num = val
+                        break
             
             # 漢字（騎手名）の抽出
             kanji = re.findall(r"([一-龠]{2,})", line)
@@ -62,7 +68,8 @@ if odds_raw and prev_raw:
             kisyu_cand = [k for k in kanji if k not in ignore]
             kisyu = kisyu_cand[-1] if kisyu_cand else "不明"
             
-            rows.append({"馬番": horse_num, "騎手": kisyu, "単勝": tan_odds})
+            if horse_num > 0:
+                rows.append({"馬番": horse_num, "騎手": kisyu, "単勝": tan_odds})
 
         df = pd.DataFrame(rows).drop_duplicates('馬番').sort_values("単勝")
         
@@ -71,31 +78,17 @@ if odds_raw and prev_raw:
             df['根拠'] = df['馬番'].apply(lambda x: " / ".join(wave_map.get(x, [])))
 
             st.subheader("📊 解析告知テーブル")
-            # indexを隠し、列幅を固定する table 形式で出力
             st.table(df[['馬番', '騎手', '単勝', '判定', '根拠']].reset_index(drop=True))
 
-            # --- 3. 推奨馬券（三連単マルチ工夫版） ---
+            # --- 推奨馬券告知 ---
             st.divider()
-            jiku = df.iloc[0]['馬番'] # 人気1位を軸（例:3番）
-            
-            # 相手：2, 11, 12番を抽出
-            # 12頭立てなら 11番(逆2), 12番(逆1)
+            jiku = df.iloc[0]['馬番']
             target_opponents = [2, total_n, total_n-1]
             multi_opponents = [n for n in target_opponents if n <= total_n and n != jiku]
 
             st.subheader("🎫 推奨馬券告知")
-            
-            # 三連複1頭軸流し
-            fuku_opps = sorted(list(set([1, 2, 10, 11, 12])))
-            fuku_opps = [n for n in fuku_opps if n <= total_n and n != jiku]
-            st.success(f"**三連複 1頭軸流し**")
-            st.write(f"軸：{jiku} ―― 相手：{', '.join(map(str, fuku_opps))}")
-
-            # 三連単 軸1頭マルチ
-            st.info(f"**三連単 軸1頭マルチ（構造核心）**")
-            st.write(f"軸：**{jiku}番**")
-            st.write(f"相手：**{', '.join(map(str, multi_opponents))}番**")
-            st.caption(f"※単勝断層および正逆2番・逆1番の波動を重視した3点マルチ構成。")
+            st.success(f"**三連複 1頭軸流し**： 軸 {jiku} ―― 相手 {', '.join(map(str, [1, 2, 10, 11, 12] if total_n >=12 else [1, 2, total_n]))}")
+            st.info(f"**三連単 軸1頭マルチ（3点）**： 軸 {jiku} ―― 相手 {', '.join(map(str, multi_opponents))}")
 
     except Exception as e:
         st.error(f"解析エラー: {e}")
