@@ -1,0 +1,59 @@
+import streamlit as st
+import pandas as pd
+import re
+
+# 正逆10巡目計算
+def get_10_layers(horse_list, total_n):
+    waves = set()
+    for h in horse_list:
+        rev = total_n - h + 1
+        for i in range(10):
+            waves.add(h + (i * total_n))
+            waves.add(rev + (i * total_n))
+    return waves
+
+st.set_page_config(page_title="波動×断層 穴馬解析", layout="wide")
+st.title("🎯 地方競馬 波動・断層解析エディション")
+
+# 入力エリア
+col1, col2 = st.columns(2)
+with col1:
+    prev_res = st.text_input("【1】前レース確定着順 (例: 7, 6, 9)", "")
+    total_n = st.number_input("【2】今レースの頭数", min_value=1, value=12)
+with col2:
+    odds_data = st.text_area("【3】オッズ表(単複)をコピペ", height=150)
+
+if odds_data and prev_res:
+    try:
+        # 前走データ処理
+        prev_list = [int(x.strip()) for x in prev_res.split(",")]
+        wave_nums = get_10_layers(prev_list, total_n)
+        
+        # オッズ解析
+        pattern = r"(\d+)\s+[\s\S]+?\s+(\d+\.\d+)\s+(\d+\.\d+)-"
+        matches = re.findall(pattern, odds_data)
+        df = pd.DataFrame(matches, columns=['馬番', '単勝', '複勝下限']).astype(float)
+        df = df.sort_values('単勝').reset_index(drop=True)
+        
+        # 断層計算
+        df['断層'] = (df['単勝'].shift(-1) / df['単勝']).fillna(1.0)
+        
+        # 判定
+        st.subheader("📊 解析結果")
+        def judge(row):
+            h = int(row['馬番'])
+            res = []
+            if h in wave_nums: res.append("🔥波動合致")
+            if row['断層'] > 1.5: res.append("⚡断層直上")
+            if 50 < row['単勝'] < 130: res.append("🕵️仕込み圏内")
+            return " ".join(res)
+
+        df['判定'] = df.apply(judge, axis=1)
+        
+        # 表示（色付け）
+        st.dataframe(df.style.highlight_max(subset=['断層'], color='#ff4b4b'))
+        
+        st.success("12Rのような『波動×仕込み圏内』の馬を狙ってください。")
+        
+    except Exception as e:
+        st.error("入力形式を確認してください。")
