@@ -2,8 +2,8 @@ import streamlit as st
 import pandas as pd
 import re
 
+# --- 1. 構造計算ロジック ---
 def get_wave_logic(prev_list, total_n):
-    # 正逆1, 10を最優先の連続構造として固定
     targets = {1, total_n, 10, (max(1, total_n - 9))}
     wave_details = {1: ["正1"], total_n: ["逆1"], 10: ["正10"], (max(1, total_n-9)): ["逆10"]}
     for h in prev_list:
@@ -17,11 +17,11 @@ def get_wave_logic(prev_list, total_n):
                     wave_details[v].append(f"{h}の{'正' if v==p else '逆'}{i+1}巡")
     return sorted(list(targets)), wave_details
 
-st.set_page_config(page_title="構造核心告知システム", layout="wide")
+st.set_page_config(page_title="構造核心告知", layout="wide")
 
-# --- 最上部：連続出現数字の目立つ告知 ---
+# --- 2. 連続出現数字の告知（最上部固定） ---
 st.error("🔥 【核心構造：連続出現数字】 🔥")
-st.markdown("### **正逆 1番・10番・12番・3番**（現在このラインが連動中。穴馬はここから炙り出します）")
+st.markdown("### **正逆 1番・10番・12番・3番**（現在このラインが連動中）")
 
 st.divider()
 
@@ -30,74 +30,72 @@ with c1:
     prev_raw = st.text_input("【1】前走確定着順", "7, 6, 9")
     total_n = st.number_input("【2】今レース頭数", min_value=1, value=12)
 with c2:
-    odds_raw = st.text_area("【3】オッズ表をコピペ", height=200)
+    # 画像でもテキストでも対応できるよう入力を受け付け
+    odds_raw = st.text_area("【3】出馬表をコピペしてください", height=200, placeholder="人気 枠 馬番 馬名 単勝... の順で貼り付け")
 
 if odds_raw and prev_raw:
     try:
         prev_list = [int(x.strip()) for x in prev_raw.split(",") if x.strip().isdigit()]
         wave_list, wave_map = get_wave_logic(prev_list, total_n)
         
-        # --- 超堅牢なデータ抽出ロジック（フォーマット崩れ対策） ---
         rows = []
         for line in odds_raw.split('\n'):
             line = line.strip()
-            # 1. 小数（オッズ）を探す
-            floats = re.findall(r"\d+\.\d+", line)
+            # 数値をすべて抽出
+            nums = re.findall(r"\d+\.\d+|\d+", line)
+            if len(nums) < 4: continue
+            
+            # 画像[image_03e7bb.png]の並びに準拠：
+            # nums[0]=人気, nums[1]=枠, nums[2]=馬番, nums[3]=単勝オッズ(小数)
+            # もしnums[3]が整数なら、小数が見つかるまでスライド
+            floats = [n for n in nums if "." in n]
             if not floats: continue
             
-            # 2. 単勝オッズ（最初の小数）の左側を解析して馬番を特定
-            left_part = line.split(floats[0])[0].strip()
-            ints_left = re.findall(r"\d+", left_part)
-            horse_num = int(ints_left[-1]) if ints_left else 0
+            tan_odds = float(floats[0])
+            # 単勝オッズ(floats[0])のインデックスを探し、その2つ前が「馬番」
+            f_idx = nums.index(floats[0])
+            horse_num = int(nums[f_idx - 1])
             
-            # 3. 行全体から漢字（騎手名）を特定
-            # 2文字以上の漢字を抽出
-            kanji_names = re.findall(r"([一-龠]{2,})", line)
-            # 特定の場所名を除外して最後の漢字を騎手名とする
-            ignore_list = ["船橋","浦和","大井","川崎","門別","高知","佐賀"]
-            kisyu_list = [k for k in kanji_names if k not in ignore_list]
-            kisyu = kisyu_list[-1] if kisyu_list else "不明"
+            # 漢字（騎手名）の抽出
+            kanji = re.findall(r"([一-龠]{2,})", line)
+            ignore = ["船橋","浦和","大井","川崎","単勝","複勝"]
+            kisyu_cand = [k for k in kanji if k not in ignore]
+            kisyu = kisyu_cand[-1] if kisyu_cand else "不明"
             
-            if horse_num > 0:
-                rows.append({
-                    "馬番": horse_num,
-                    "騎手": kisyu,
-                    "単勝": float(floats[0]),
-                    "複下": float(floats[1]) if len(floats) > 1 else 0.0
-                })
+            rows.append({"馬番": horse_num, "騎手": kisyu, "単勝": tan_odds})
 
         df = pd.DataFrame(rows).drop_duplicates('馬番').sort_values("単勝")
         
         if not df.empty:
-            df['単順'] = range(1, len(df) + 1)
-            df['複順'] = df['複下'].rank(method='min')
-            df['異常'] = df.apply(lambda r: "🚨" if (r['単順'] - r['複順']) >= 3 else "", axis=1)
             df['判定'] = df['馬番'].apply(lambda x: "🔥核心" if x in wave_list else "")
             df['根拠'] = df['馬番'].apply(lambda x: " / ".join(wave_map.get(x, [])))
 
-            # --- テーブル表示（カラム崩れを許さない表示形式） ---
             st.subheader("📊 解析告知テーブル")
-            # st.table を使い、全データを固定幅で表示
-            st.table(df[['馬番', '騎手', '単勝', '判定', '異常', '根拠']].reset_index(drop=True))
+            # indexを隠し、列幅を固定する table 形式で出力
+            st.table(df[['馬番', '騎手', '単勝', '判定', '根拠']].reset_index(drop=True))
 
-            # --- 推奨馬券セクション ---
+            # --- 3. 推奨馬券（三連単マルチ工夫版） ---
             st.divider()
-            jiku = df.iloc[0]['馬番']
+            jiku = df.iloc[0]['馬番'] # 人気1位を軸（例:3番）
             
-            # 相手候補の整理
-            ana_nums = [1, total_n, 10, max(1, total_n-9)]
-            opponents = sorted(list(set(ana_nums + [2, total_n-1]))) # 2, 11番等も追加
-            opponents = [n for n in opponents if n != jiku and n <= total_n]
+            # 相手：2, 11, 12番を抽出
+            # 12頭立てなら 11番(逆2), 12番(逆1)
+            target_opponents = [2, total_n, total_n-1]
+            multi_opponents = [n for n in target_opponents if n <= total_n and n != jiku]
 
             st.subheader("🎫 推奨馬券告知")
+            
+            # 三連複1頭軸流し
+            fuku_opps = sorted(list(set([1, 2, 10, 11, 12])))
+            fuku_opps = [n for n in fuku_opps if n <= total_n and n != jiku]
             st.success(f"**三連複 1頭軸流し**")
-            st.write(f"軸：{jiku} ―― 相手：{', '.join(map(str, opponents))}")
+            st.write(f"軸：{jiku} ―― 相手：{', '.join(map(str, fuku_opps))}")
 
-            st.info(f"**三連単 軸1頭マルチ（工夫枠）**")
-            # オッズ解析で🚨や上位人気の馬を相手に優先
-            multi_opponents = [n for n in [2, total_n-1, total_n] if n <= total_n and n != jiku]
-            st.write(f"軸：{jiku} ―― 相手：{', '.join(map(str, multi_opponents))}")
-            st.caption(f"※連続構造の端（{total_n}番）と、オッズ乖離の可能性がある正逆2番を厚めに。")
+            # 三連単 軸1頭マルチ
+            st.info(f"**三連単 軸1頭マルチ（構造核心）**")
+            st.write(f"軸：**{jiku}番**")
+            st.write(f"相手：**{', '.join(map(str, multi_opponents))}番**")
+            st.caption(f"※単勝断層および正逆2番・逆1番の波動を重視した3点マルチ構成。")
 
     except Exception as e:
-        st.error(f"解析待機中... データを貼り付けてください。")
+        st.error(f"解析エラー: {e}")
