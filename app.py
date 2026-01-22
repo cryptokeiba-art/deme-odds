@@ -3,7 +3,7 @@ import pandas as pd
 import re
 
 def get_wave_logic(prev_list, total_n):
-    # 正逆1, 10は連続構造として固定
+    # 正逆1, 10を最優先の連続構造として固定
     targets = {1, total_n, 10, (max(1, total_n - 9))}
     wave_details = {1: ["正1"], total_n: ["逆1"], 10: ["正10"], (max(1, total_n-9)): ["逆10"]}
     for h in prev_list:
@@ -18,90 +18,86 @@ def get_wave_logic(prev_list, total_n):
     return sorted(list(targets)), wave_details
 
 st.set_page_config(page_title="構造核心告知システム", layout="wide")
-st.title("🛡️ 構造核心告知：出馬表完全解析版")
+
+# --- 最上部：連続出現数字の目立つ告知 ---
+st.error("🔥 【核心構造：連続出現数字】 🔥")
+st.markdown("### **正逆 1番・10番・12番・3番**（現在このラインが連動中。穴馬はここから炙り出します）")
+
+st.divider()
 
 c1, c2 = st.columns([1, 2])
 with c1:
     prev_raw = st.text_input("【1】前走確定着順", "7, 6, 9")
     total_n = st.number_input("【2】今レース頭数", min_value=1, value=12)
 with c2:
-    odds_raw = st.text_area("【3】オッズ表をコピペ（枠・馬番・オッズ・騎手を含む範囲）", height=200)
+    odds_raw = st.text_area("【3】オッズ表をコピペ", height=200)
 
 if odds_raw and prev_raw:
     try:
         prev_list = [int(x.strip()) for x in prev_raw.split(",") if x.strip().isdigit()]
         wave_list, wave_map = get_wave_logic(prev_list, total_n)
         
-        # --- 堅牢なデータ抽出ロジック ---
+        # --- 超堅牢なデータ抽出ロジック（フォーマット崩れ対策） ---
         rows = []
         for line in odds_raw.split('\n'):
             line = line.strip()
-            # 1. 小数（単勝・複勝オッズ）をすべて見つける
+            # 1. 小数（オッズ）を探す
             floats = re.findall(r"\d+\.\d+", line)
-            if len(floats) < 1: continue
+            if not floats: continue
             
-            # 2. 単勝オッズの左側の文字列から「馬番」を特定
-            # 単勝オッズの直前にある整数が馬番であるという物理的規則を利用
-            prefix = line.split(floats[0])[0].strip()
-            all_ints = re.findall(r"\d+", prefix)
-            if not all_ints: continue
-            horse_num = int(all_ints[-1]) # 最も右にある整数が馬番
+            # 2. 単勝オッズ（最初の小数）の左側を解析して馬番を特定
+            left_part = line.split(floats[0])[0].strip()
+            ints_left = re.findall(r"\d+", left_part)
+            horse_num = int(ints_left[-1]) if ints_left else 0
             
-            # 3. 騎手名（2文字以上の漢字）
-            names = re.findall(r"([一-龠]{2,})", line)
-            # 場所名などを除外
-            kisyu = [n for n in names if n not in ["船橋","浦和","大井","川崎","門別","高知","佐賀"]][-1] if names else "不明"
+            # 3. 行全体から漢字（騎手名）を特定
+            # 2文字以上の漢字を抽出
+            kanji_names = re.findall(r"([一-龠]{2,})", line)
+            # 特定の場所名を除外して最後の漢字を騎手名とする
+            ignore_list = ["船橋","浦和","大井","川崎","門別","高知","佐賀"]
+            kisyu_list = [k for k in kanji_names if k not in ignore_list]
+            kisyu = kisyu_list[-1] if kisyu_list else "不明"
             
-            rows.append({
-                "馬番": horse_num,
-                "単勝": float(floats[0]),
-                "複下": float(floats[1]) if len(floats) > 1 else 0.0,
-                "騎手": kisyu
-            })
+            if horse_num > 0:
+                rows.append({
+                    "馬番": horse_num,
+                    "騎手": kisyu,
+                    "単勝": float(floats[0]),
+                    "複下": float(floats[1]) if len(floats) > 1 else 0.0
+                })
 
         df = pd.DataFrame(rows).drop_duplicates('馬番').sort_values("単勝")
-        df['単順'] = range(1, len(df) + 1)
-        df['複順'] = df['複下'].rank(method='min')
-        df['異常'] = df.apply(lambda r: "🚨" if (r['単順'] - r['複順']) >= 3 else "", axis=1)
-
+        
         if not df.empty:
-            st.subheader("📊 解析告知テーブル")
+            df['単順'] = range(1, len(df) + 1)
+            df['複順'] = df['複下'].rank(method='min')
+            df['異常'] = df.apply(lambda r: "🚨" if (r['単順'] - r['複順']) >= 3 else "", axis=1)
             df['判定'] = df['馬番'].apply(lambda x: "🔥核心" if x in wave_list else "")
             df['根拠'] = df['馬番'].apply(lambda x: " / ".join(wave_map.get(x, [])))
-            # インデックスを隠して馬番を主役にする
-            st.dataframe(df[['馬番', '騎手', '単勝', '判定', '異常', '根拠']], use_container_width=True, hide_index=True)
 
-            # --- 有力馬選定 ---
-            jiku = df.iloc[0]['馬番'] # ◎ 3番想定
-            
-            # ◯：構造(2, 11, 6, 7)かつオッズ支持(15倍以内)
-            maru_candidates = [n for n in [2, total_n-1, 6, 7] if n <= total_n and n != jiku]
-            selected_maru = [n for n in maru_candidates if not df[df['馬番']==n].empty and df[df['馬番']==n].iloc[0]['単勝'] <= 15.0]
+            # --- テーブル表示（カラム崩れを許さない表示形式） ---
+            st.subheader("📊 解析告知テーブル")
+            # st.table を使い、全データを固定幅で表示
+            st.table(df[['馬番', '騎手', '単勝', '判定', '異常', '根拠']].reset_index(drop=True))
 
+            # --- 推奨馬券セクション ---
             st.divider()
-            st.subheader("🐴 核心告知")
-            st.write(f"◎ **{jiku}番** （軸：支持の壁）")
-            st.write(f"◯ **{', '.join(map(str, selected_maru)) if selected_maru else 'なし'}番** （構造＋オッズ支持）")
-            st.write(f"▲ **{', '.join(map(str, [1, total_n]))}番** （連続構造：正逆1）")
-            st.write(f"△ **{', '.join(map(str, [10, max(1, total_n-9)]))}番** （連続構造：正逆10）")
+            jiku = df.iloc[0]['馬番']
+            
+            # 相手候補の整理
+            ana_nums = [1, total_n, 10, max(1, total_n-9)]
+            opponents = sorted(list(set(ana_nums + [2, total_n-1]))) # 2, 11番等も追加
+            opponents = [n for n in opponents if n != jiku and n <= total_n]
 
-            # --- 推奨馬券 ---
-            st.subheader("🎫 推奨馬券")
-            
-            # 三連複1頭軸流し
-            opponents = sorted(list(set(selected_maru + [1, total_n, 10, max(1, total_n-9)])))
-            opponents = [n for n in opponents if n != jiku]
-            
+            st.subheader("🎫 推奨馬券告知")
             st.success(f"**三連複 1頭軸流し**")
             st.write(f"軸：{jiku} ―― 相手：{', '.join(map(str, opponents))}")
 
-            # 三連単 軸1頭マルチ
-            # 相手を異常🚨馬や強構造馬（2, 11, 12番等）に絞って工夫
+            st.info(f"**三連単 軸1頭マルチ（工夫枠）**")
+            # オッズ解析で🚨や上位人気の馬を相手に優先
             multi_opponents = [n for n in [2, total_n-1, total_n] if n <= total_n and n != jiku]
-            
-            st.info(f"**三連単 軸1頭マルチ（特選）**")
             st.write(f"軸：{jiku} ―― 相手：{', '.join(map(str, multi_opponents))}")
-            st.caption(f"※構造上の端（{total_n}番）と、オッズ乖離の可能性がある正逆2番を相手に指名。")
-            
+            st.caption(f"※連続構造の端（{total_n}番）と、オッズ乖離の可能性がある正逆2番を厚めに。")
+
     except Exception as e:
-        st.error(f"解析中... 正しいフォーマットで貼り付けてください。")
+        st.error(f"解析待機中... データを貼り付けてください。")
